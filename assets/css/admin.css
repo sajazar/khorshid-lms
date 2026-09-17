@@ -1,27 +1,67 @@
-<?php
-if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
-    exit;
+:root {
+  --kh-primary: #4f46e5;
+  --kh-primary-dark: #3730a3;
+  --kh-bg: #f8fafc;
+  --kh-card: #ffffff;
+  --kh-text: #172033;
+  --kh-muted: #64748b;
+  --kh-border: #e2e8f0;
+  --kh-radius: 16px;
 }
 
-if ( '1' !== get_option( 'kh_lms_delete_data', '0' ) ) {
-    return;
+.kh-lms-admin {
+  direction: rtl;
+  max-width: 1320px;
+  color: var(--kh-text);
 }
 
-global $wpdb;
-
-$tables = [
-    'courses',
-    'chapters',
-    'lessons',
-    'enrollments',
-    'progress',
-    'tokens',
-    'certificates',
-];
-
-foreach ( $tables as $table ) {
-    $wpdb->query( 'DROP TABLE IF EXISTS ' . $wpdb->prefix . 'kh_lms_' . $table );
+.kh-lms-admin h1 { font-size: 28px; margin: 24px 0; }
+.kh-lms-admin h2 { font-size: 19px; margin-top: 0; }
+.kh-lms-admin .kh-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 18px;
+  margin: 20px 0;
 }
 
-delete_option( 'kh_lms_version' );
-delete_option( 'kh_lms_secret' );
+.kh-lms-admin .kh-card {
+  background: var(--kh-card);
+  border: 1px solid var(--kh-border);
+  border-radius: var(--kh-radius);
+  padding: 22px;
+  margin: 20px 0;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .06);
+}
+
+.kh-lms-admin .kh-card h3 { margin: 0 0 10px; color: var(--kh-muted); }
+.kh-lms-admin .kh-card p { font-size: 24px; font-weight: 700; margin: 0; }
+.kh-lms-admin label { display: block; margin: 16px 0; font-weight: 600; }
+.kh-lms-admin input:not([type="checkbox"]),
+.kh-lms-admin textarea,
+.kh-lms-admin select {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  max-width: 860px;
+  margin-top: 7px;
+  padding: 11px 13px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--kh-text);
+}
+.kh-lms-admin textarea { min-height: 125px; resize: vertical; }
+.kh-lms-admin input:focus,
+.kh-lms-admin textarea:focus,
+.kh-lms-admin select:focus { border-color: var(--kh-primary); box-shadow: 0 0 0 2px rgba(79,70,229,.15); outline: none; }
+.kh-lms-admin .kh-chapter { background: #f8fafc; border: 1px solid var(--kh-border); border-radius: 14px; padding: 18px; margin: 18px 0; }
+.kh-lms-admin .kh-lessons { margin: 16px 0; }
+.kh-lms-admin .kh-lesson { display: grid; grid-template-columns: 1.2fr .7fr 1fr auto; gap: 12px; align-items: center; margin: 12px 0; }
+.kh-lms-admin .kh-lesson label { margin: 0; white-space: nowrap; }
+.kh-lms-admin .button-primary { background: var(--kh-primary) !important; border-color: var(--kh-primary-dark) !important; }
+.kh-lms-admin .button-primary:hover { background: var(--kh-primary-dark) !important; }
+
+@media (max-width: 782px) {
+  .kh-lms-admin .kh-lesson { grid-template-columns: 1fr; }
+  .kh-lms-admin .kh-card { padding: 16px; }
+}
