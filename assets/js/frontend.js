@@ -1,0 +1,1 @@
+document.addEventListener('DOMContentLoaded',()=>{document.querySelectorAll('[data-kh-lms-video]').forEach(async el=>{const lesson=el.dataset.khLmsVideo;const r=await fetch(`${khLms.api}video-token/${lesson}`,{method:'POST',headers:{'X-WP-Nonce':khLms.nonce}});if(r.ok){const d=await r.json();el.src=d.url;}});});
