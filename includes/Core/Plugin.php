@@ -27,12 +27,9 @@ final class Plugin {
         self::$booted = true;
 
         if ( version_compare( PHP_VERSION, '8.1', '<' ) ) {
-            add_action(
-                'admin_notices',
-                static function (): void {
-                    echo '<div class="notice notice-error"><p>افزونه Khorshid LMS نیاز به PHP 8.1 یا بالاتر دارد.</p></div>';
-                }
-            );
+            add_action( 'admin_notices', static function (): void {
+                echo '<div class="notice notice-error"><p>' . esc_html__( 'Khorshid LMS به PHP 8.1 یا بالاتر نیاز دارد.', 'khorshid-lms' ) . '</p></div>';
+            } );
             return;
         }
 
@@ -41,9 +38,12 @@ final class Plugin {
         Frontend::hooks();
         Rest::hooks();
         VideoStream::hooks();
-        WooCommerce::hooks();
+        // WooCommerce is a soft dependency; its class must never be allowed
+        // to break WordPress when WooCommerce is disabled or unavailable.
+        if ( class_exists( __NAMESPACE__ . '\\WooCommerce' ) ) {
+            WooCommerce::hooks();
+        }
         CertificateManager::hooks();
-
         add_action( 'init', [ self::class, 'register_endpoints' ] );
     }
 
@@ -53,20 +53,15 @@ final class Plugin {
 
     private static function ensure_storage(): void {
         $upload_dir = wp_upload_dir();
-        $base_dir   = trailingslashit( $upload_dir['basedir'] ) . 'khorshid-lms-storage';
-
+        $base_dir = trailingslashit( $upload_dir['basedir'] ) . 'khorshid-lms-storage';
         wp_mkdir_p( $base_dir . '/certificates' );
         wp_mkdir_p( $base_dir . '/cache' );
 
         if ( ! file_exists( $base_dir . '/index.php' ) ) {
             file_put_contents( $base_dir . '/index.php', "<?php\n// Silence is golden.\n" );
         }
-
         if ( ! file_exists( $base_dir . '/.htaccess' ) ) {
-            file_put_contents(
-                $base_dir . '/.htaccess',
-                "Options -Indexes\n<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n"
-            );
+            file_put_contents( $base_dir . '/.htaccess', "Options -Indexes\n<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n" );
         }
     }
 }
