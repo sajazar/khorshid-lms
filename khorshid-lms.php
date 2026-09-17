@@ -3,7 +3,7 @@
  * Plugin Name: Khorshid LMS
  * Plugin URI: https://github.com/sajazar/khorshid-lms
  * Description: Production-ready modular LMS for WordPress + WooCommerce.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Requires at least: 6.0
  * Requires PHP: 8.1
  * Text Domain: khorshid-lms
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 if ( ! defined( 'KH_LMS_VERSION' ) ) {
-    define( 'KH_LMS_VERSION', '1.1.0' );
+    define( 'KH_LMS_VERSION', '1.2.0' );
 }
 if ( ! defined( 'KH_LMS_FILE' ) ) {
     define( 'KH_LMS_FILE', __FILE__ );

@@ -5,59 +5,111 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-final class Utils {
-    public static function course_code(): string {
-        $prefix = 'KH-LMS-';
-        $next   = self::next_course_number();
-
-        return $prefix . str_pad( (string) $next, 5, '0', STR_PAD_LEFT );
-    }
-
-    public static function next_course_number(): int {
+final class Repository {
+    public static function table( string $name ): string {
         global $wpdb;
 
-        $table = $wpdb->prefix . 'kh_lms_courses';
-        $sql   = $wpdb->prepare( 'SELECT MAX(CAST(SUBSTRING(course_code, 9) AS UNSIGNED)) FROM ' . $table );
-        $max   = (int) $wpdb->get_var( $sql );
-
-        return $max + 1;
+        return $wpdb->prefix . 'kh_lms_' . $name;
     }
 
-    public static function enforce_nonce(): bool {
-        return isset( $_REQUEST['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_REQUEST['_wpnonce'] ) ), 'kh_lms_save_course' );
-    }
-
-    public static function user_can_access_course( int $user_id, int $course_id ): bool {
-        if ( ! $user_id || ! $course_id ) {
-            return false;
-        }
-
-        $course = Repository::course( $course_id );
-        if ( ! $course ) {
-            return false;
-        }
-
-        if ( current_user_can( 'manage_options' ) ) {
-            return true;
-        }
-
-        return Repository::is_enrolled( $user_id, $course_id );
-    }
-
-    public static function user_can_access_lesson( int $user_id, int $lesson_id ): bool {
+    public static function course( int $id ): ?object {
         global $wpdb;
 
-        $lesson = $wpdb->get_row(
+        $table = self::table( 'courses' );
+        $row   = $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM ' . $table . ' WHERE id = %d', $id ) );
+
+        return $row ?: null;
+    }
+
+    public static function courses( array $args = [] ): array {
+        global $wpdb;
+
+        $table  = self::table( 'courses' );
+        $status = isset( $args['status'] ) ? sanitize_key( $args['status'] ) : 'publish';
+        $limit  = isset( $args['limit'] ) ? absint( $args['limit'] ) : 0;
+
+        $sql = 'SELECT * FROM ' . $table . ' WHERE status = %s ORDER BY id DESC';
+        if ( $limit > 0 ) {
+            $sql .= ' LIMIT %d';
+            return $wpdb->get_results( $wpdb->prepare( $sql, $status, $limit ) );
+        }
+
+        return $wpdb->get_results( $wpdb->prepare( $sql, $status ) );
+    }
+
+    public static function curriculum( int $course_id ): array {
+        global $wpdb;
+
+        $chapters_table = self::table( 'chapters' );
+        $lessons_table  = self::table( 'lessons' );
+
+        $chapters = $wpdb->get_results(
             $wpdb->prepare(
-                'SELECT course_id FROM ' . Repository::table( 'lessons' ) . ' WHERE id = %d',
-                $lesson_id
+                'SELECT * FROM ' . $chapters_table . ' WHERE course_id = %d ORDER BY sort_order ASC, id ASC',
+                $course_id
             )
         );
 
-        if ( ! $lesson ) {
+        foreach ( $chapters as $chapter ) {
+            $chapter->lessons = $wpdb->get_results(
+                $wpdb->prepare(
+                    'SELECT * FROM ' . $lessons_table . ' WHERE chapter_id = %d ORDER BY sort_order ASC, id ASC',
+                    $chapter->id
+                )
+            );
+        }
+
+        return $chapters;
+    }
+
+    public static function is_enrolled( int $user_id, int $course_id ): bool {
+        global $wpdb;
+
+        $table = self::table( 'enrollments' );
+
+        $count = $wpdb->get_var(
+            $wpdb->prepare(
+                'SELECT COUNT(*) FROM ' . $table . ' WHERE user_id = %d AND course_id = %d AND status = %s AND (expires_at IS NULL OR expires_at > UTC_TIMESTAMP())',
+                $user_id,
+                $course_id,
+                'active'
+            )
+        );
+
+        return (bool) $count;
+    }
+
+    public static function lesson( int $id ): ?object {
+        global $wpdb;
+
+        $row = $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM ' . self::table( 'lessons' ) . ' WHERE id = %d', $id ) );
+
+        return $row ?: null;
+    }
+
+    public static function is_course_completed( int $user_id, int $course_id ): bool {
+        global $wpdb;
+
+        $required = $wpdb->get_var(
+            $wpdb->prepare(
+                'SELECT COUNT(*) FROM ' . self::table( 'lessons' ) . ' WHERE course_id = %d AND status = %s',
+                $course_id,
+                'publish'
+            )
+        );
+
+        if ( ! $required ) {
             return false;
         }
 
-        return self::user_can_access_course( $user_id, (int) $lesson->course_id );
+        $completed = $wpdb->get_var(
+            $wpdb->prepare(
+                'SELECT COUNT(*) FROM ' . self::table( 'progress' ) . ' WHERE user_id = %d AND course_id = %d AND completed = 1',
+                $user_id,
+                $course_id
+            )
+        );
+
+        return (int) $completed >= (int) $required;
     }
 }

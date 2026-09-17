@@ -5,95 +5,137 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-final class Frontend {
+final class Rest {
     public static function hooks(): void {
-        add_shortcode( 'kh_lms_course', [ self::class, 'course_shortcode' ] );
-        add_shortcode( 'kh_lms_my_courses', [ self::class, 'my_courses_shortcode' ] );
-        add_action( 'wp_enqueue_scripts', [ self::class, 'assets' ] );
-        add_filter( 'query_vars', [ self::class, 'query_vars' ] );
+        add_action( 'rest_api_init', [ self::class, 'routes' ] );
     }
 
-    public static function query_vars( array $vars ): array {
-        $vars[] = 'my-courses';
-        return $vars;
+    public static function routes(): void {
+        register_rest_route(
+            'kh-lms/v1',
+            '/courses/(?P<id>\d+)',
+            [
+                'methods'             => 'GET',
+                'callback'            => static function ( \WP_REST_Request $request ) {
+                    return Repository::course( (int) $request['id'] );
+                },
+                'permission_callback' => '__return_true',
+            ]
+        );
+
+        register_rest_route(
+            'kh-lms/v1',
+            '/progress',
+            [
+                'methods'             => 'POST',
+                'callback'            => [ self::class, 'handle_progress' ],
+                'permission_callback' => static function (): bool {
+                    return is_user_logged_in();
+                },
+            ]
+        );
+
+        register_rest_route(
+            'kh-lms/v1',
+            '/video-token/(?P<lesson>\d+)',
+            [
+                'methods'             => 'POST',
+                'callback'            => [ self::class, 'issue_video_token' ],
+                'permission_callback' => static function (): bool {
+                    return is_user_logged_in();
+                },
+            ]
+        );
+
+        register_rest_route(
+            'kh-lms/v1',
+            '/my-courses',
+            [
+                'methods'             => 'GET',
+                'callback'            => [ self::class, 'my_courses' ],
+                'permission_callback' => static function (): bool {
+                    return is_user_logged_in();
+                },
+            ]
+        );
     }
 
-    public static function assets(): void {
-        if ( is_admin() ) {
-            return;
-        }
-
-        if ( is_singular() || is_account_page() ) {
-            wp_enqueue_style( 'kh-lms-frontend', KH_LMS_URL . 'assets/css/frontend.css', [], KH_LMS_VERSION );
-            wp_enqueue_script( 'kh-lms-frontend', KH_LMS_URL . 'assets/js/frontend.js', [], KH_LMS_VERSION, true );
-            wp_localize_script(
-                'kh-lms-frontend',
-                'khLms',
-                [
-                    'api'   => esc_url_raw( rest_url( 'kh-lms/v1/' ) ),
-                    'nonce' => wp_create_nonce( 'wp_rest' ),
-                ]
-            );
-        }
-    }
-
-    public static function course_shortcode( array $atts = [] ): string {
-        $course_id = isset( $atts['id'] ) ? absint( $atts['id'] ) : ( isset( $atts['course'] ) ? absint( $atts['course'] ) : 0 );
-        $course    = Repository::course( $course_id );
-
-        if ( ! $course ) {
-            return '<p>دوره‌ای پیدا نشد.</p>';
-        }
-
-        $user_id = get_current_user_id();
-        $has_access = $user_id ? Repository::is_enrolled( $user_id, $course_id ) : false;
-
-        if ( 'paid' === $course->type && ! $has_access && ! is_user_logged_in() ) {
-            return '<div class="kh-course-teaser"><h2>' . esc_html( $course->title ) . '</h2><p>' . esc_html( $course->short_description ) . '</p><a class="kh-button" href="' . esc_url( wp_login_url( get_permalink() ) ) . '">ورود و خرید دوره</a></div>';
-        }
-
-        $html = '<article class="kh-course"><header><h1>' . esc_html( $course->title ) . '</h1><p>' . esc_html( $course->short_description ) . '</p>' . ( ( 'paid' === $course->type && ! $has_access ) ? '<a class="kh-button" href="' . esc_url( wc_get_cart_url() ) . '">خرید دوره</a>' : '' ) . '</header>';
-        $html .= '<div class="kh-curriculum">';
-
-        foreach ( Repository::curriculum( $course_id ) as $chapter ) {
-            $html .= '<section class="kh-chapter-box"><h2>' . esc_html( $chapter->title ) . '</h2><ul>';
-            foreach ( $chapter->lessons as $lesson ) {
-                $locked = ( 'paid' === $course->type && ! $has_access && ! $lesson->is_preview ) ? true : false;
-                $html  .= '<li>' . ( $locked ? '🔒' : '▶' ) . ' ' . esc_html( $lesson->title ) . '</li>';
-            }
-            $html .= '</ul></section>';
-        }
-
-        $html .= '</div></article>';
-
-        return $html;
-    }
-
-    public static function my_courses_shortcode(): string {
-        if ( ! is_user_logged_in() ) {
-            return '<p>برای مشاهده دوره‌های شما باید وارد حساب کاربری شوید.</p>';
-        }
-
+    public static function my_courses( \WP_REST_Request $request ) {
         global $wpdb;
+        $user_id = get_current_user_id();
 
-        $rows = $wpdb->get_results(
+        return $wpdb->get_results(
             $wpdb->prepare(
-                'SELECT c.* FROM ' . Repository::table( 'courses' ) . ' c INNER JOIN ' . Repository::table( 'enrollments' ) . ' e ON e.course_id = c.id WHERE e.user_id = %d AND e.status = %s',
-                get_current_user_id(),
+                'SELECT c.* FROM ' . Repository::table( 'courses' ) . ' c INNER JOIN ' . Repository::table( 'enrollments' ) . ' e ON e.course_id = c.id WHERE e.user_id = %d AND e.status = %s ORDER BY c.id DESC',
+                $user_id,
                 'active'
             )
         );
+    }
 
-        if ( empty( $rows ) ) {
-            return '<p>هنوز دوره‌ای خریداری نکرده‌اید.</p>';
+    public static function issue_video_token( \WP_REST_Request $request ) {
+        $lesson_id = absint( $request['lesson'] );
+        $user_id   = get_current_user_id();
+
+        $lesson = Repository::lesson( $lesson_id );
+        if ( ! $lesson || ! Utils::user_can_access_lesson( $user_id, $lesson_id ) ) {
+            return new \WP_Error( 'forbidden', 'دسترسی به این درس مجاز نیست.', [ 'status' => 403 ] );
         }
 
-        $output = '<div class="kh-courses">';
-        foreach ( $rows as $course ) {
-            $output .= '<div class="kh-card"><h3>' . esc_html( $course->title ) . '</h3><p>' . esc_html( $course->short_description ) . '</p>' . do_shortcode( '[kh_lms_course id="' . (int) $course->id . '"]' ) . '</div>';
-        }
-        $output .= '</div>';
+        $token = VideoSecurity::issue_token( $user_id, $lesson_id, (int) $lesson->course_id );
 
-        return $output;
+        return [
+            'token'      => $token,
+            'expires_in' => (int) Settings::get( 'token_lifetime', 180 ),
+        ];
+    }
+
+    public static function handle_progress( \WP_REST_Request $request ) {
+        $params = $request->get_json_params();
+        if ( ! is_array( $params ) ) {
+            return new \WP_Error( 'invalid_request', 'درخواست نامعتبر است.', [ 'status' => 400 ] );
+        }
+
+        $lesson_id = absint( $params['lesson_id'] ?? 0 );
+        $seconds   = max( 0, absint( $params['watched_seconds'] ?? 0 ) );
+        $duration  = max( 1, absint( $params['duration'] ?? 0 ) );
+        $user_id   = get_current_user_id();
+
+        $lesson = Repository::lesson( $lesson_id );
+        if ( ! $lesson || ! Utils::user_can_access_lesson( $user_id, $lesson_id ) ) {
+            return new \WP_Error( 'forbidden', 'دسترسی مجاز نیست.', [ 'status' => 403 ] );
+        }
+
+        $percentage = min( 100, ( $seconds / $duration ) * 100 );
+        $completed  = $percentage >= (float) Settings::get( 'completion_percentage', 90 ) ? 1 : 0;
+        $now        = current_time( 'mysql', true );
+
+        global $wpdb;
+
+        $wpdb->replace(
+            Repository::table( 'progress' ),
+            [
+                'user_id'         => $user_id,
+                'course_id'       => $lesson->course_id,
+                'lesson_id'       => $lesson_id,
+                'watched_seconds' => $seconds,
+                'duration'        => $duration,
+                'percentage'      => number_format( $percentage, 2, '.', '' ),
+                'last_position'   => $seconds,
+                'completed'       => $completed,
+                'completed_at'    => $completed ? $now : null,
+                'updated_at'      => $now,
+            ],
+            [ '%d', '%d', '%d', '%d', '%d', '%f', '%d', '%d', '%s' ]
+        );
+
+        $certificate = CertificateManager::maybe_issue_for_user( $user_id, (int) $lesson->course_id );
+
+        return [
+            'saved'      => true,
+            'completed'  => (bool) $completed,
+            'percentage' => number_format( $percentage, 2, '.', '' ),
+            'certificate' => $certificate,
+        ];
     }
 }
