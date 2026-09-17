@@ -5,254 +5,92 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-final class Admin {
+final class Frontend {
     public static function hooks(): void {
-        add_action( 'admin_menu', [ self::class, 'menu' ] );
-        add_action( 'admin_post_kh_lms_save_course', [ self::class, 'save_course' ] );
-        add_action( 'admin_enqueue_scripts', [ self::class, 'assets' ] );
+        add_shortcode( 'kh_lms_course', [ self::class, 'course_shortcode' ] );
+        add_shortcode( 'kh_lms_my_courses', [ self::class, 'my_courses_shortcode' ] );
+        add_action( 'wp_enqueue_scripts', [ self::class, 'assets' ] );
+        add_filter( 'query_vars', [ self::class, 'query_vars' ] );
     }
 
-    public static function menu(): void {
-        add_menu_page(
-            'مدیریت دوره‌ها',
-            'مدیریت دوره‌ها',
-            'manage_options',
-            'kh-lms',
-            [ self::class, 'dashboard' ],
-            'dashicons-welcome-learn-more',
-            26
-        );
-
-        add_submenu_page(
-            'kh-lms',
-            'افزودن دوره جدید',
-            'افزودن دوره جدید',
-            'manage_options',
-            'kh-lms-edit',
-            [ self::class, 'edit_course_page' ]
-        );
+    public static function query_vars( array $vars ): array {
+        $vars[] = 'my-courses';
+        return $vars;
     }
 
-    public static function assets( string $hook ): void {
-        if ( false === strpos( $hook, 'kh-lms' ) ) {
+    public static function assets(): void {
+        if ( is_admin() || ( ! is_singular() && ! is_account_page() ) ) {
             return;
         }
 
-        wp_enqueue_style( 'kh-lms-admin', KH_LMS_URL . 'assets/css/admin.css', [], KH_LMS_VERSION );
-        wp_enqueue_script( 'kh-lms-admin', KH_LMS_URL . 'assets/js/admin.js', [], KH_LMS_VERSION, true );
+        wp_enqueue_style( 'kh-lms-frontend', KH_LMS_URL . 'assets/css/frontend.css', [], KH_LMS_VERSION );
+        wp_enqueue_script( 'kh-lms-frontend', KH_LMS_URL . 'assets/js/frontend.js', [], KH_LMS_VERSION, true );
+        wp_localize_script(
+            'kh-lms-frontend',
+            'khLms',
+            [
+                'api'   => esc_url_raw( rest_url( 'kh-lms/v1/' ) ),
+                'nonce' => wp_create_nonce( 'wp_rest' ),
+            ]
+        );
     }
 
-    public static function dashboard(): void {
-        if ( ! current_user_can( 'manage_options' ) ) {
-            wp_die( 'دسترسی غیرمجاز' );
+    public static function course_shortcode( array $atts = [] ): string {
+        $atts      = shortcode_atts( [ 'id' => 0, 'course' => 0 ], $atts, 'kh_lms_course' );
+        $course_id = absint( $atts['id'] ?: $atts['course'] );
+        $course    = Repository::course( $course_id );
+
+        if ( ! $course ) {
+            return '<p>دوره‌ای پیدا نشد.</p>';
         }
 
-        $courses = Repository::courses();
+        $user_id    = get_current_user_id();
+        $has_access = $user_id ? Repository::is_enrolled( $user_id, $course_id ) : false;
+        $html       = '<article class="kh-course"><header><h1>' . esc_html( $course->title ) . '</h1><p>' . esc_html( $course->short_description ) . '</p>';
 
-        echo '<div class="wrap kh-lms-admin"><h1>مدیریت دوره‌ها</h1><div style="margin:20px 0;"><a class="button button-primary" href="' . esc_url( admin_url( 'admin.php?page=kh-lms-edit' ) ) . '">افزودن دوره جدید</a></div>';
-        echo '<div class="kh-grid">';
-
-        foreach ( $courses as $course ) {
-            echo '<div class="kh-card">';
-            echo '<h2>' . esc_html( $course->title ) . '</h2>';
-            echo '<p><strong>کد دوره:</strong> ' . esc_html( $course->course_code ) . '</p>';
-            echo '<p><strong>وضعیت:</strong> ' . esc_html( $course->status ) . '</p>';
-            echo '<p><strong>نوع:</strong> ' . esc_html( $course->type ) . '</p>';
-            echo '<p><strong>تاریخ:</strong> ' . esc_html( mysql2date( get_option( 'date_format' ), $course->created_at ) ) . '</p>';
-            echo '<p><a href="' . esc_url( admin_url( 'admin.php?page=kh-lms-edit&id=' . (int) $course->id ) ) . '">ویرایش دوره</a></p>';
-            echo '</div>';
+        if ( 'paid' === $course->type && ! $has_access ) {
+            $url   = is_user_logged_in() && function_exists( 'wc_get_cart_url' ) ? wc_get_cart_url() : wp_login_url( get_permalink() );
+            $label = is_user_logged_in() ? 'خرید دوره' : 'ورود برای خرید دوره';
+            $html .= '<a class="kh-button" href="' . esc_url( $url ) . '">' . esc_html( $label ) . '</a>';
         }
 
-        echo '</div></div>';
-    }
+        $html .= '</header><div class="kh-curriculum">';
 
-    public static function edit_course_page(): void {
-        if ( ! current_user_can( 'manage_options' ) ) {
-            wp_die( 'دسترسی غیرمجاز' );
-        }
-
-        $course_id = isset( $_GET['id'] ) ? absint( $_GET['id'] ) : 0;
-        $course    = $course_id ? Repository::course( $course_id ) : null;
-        $curriculum = $course ? Repository::curriculum( $course_id ) : [];
-        $nonce = wp_create_nonce( 'kh_lms_save_course' );
-
-        echo '<div class="wrap kh-lms-admin">';
-        echo '<h1>' . ( $course ? 'ویرایش دوره' : 'افزودن دوره جدید' ) . '</h1>';
-        echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
-        echo '<input type="hidden" name="action" value="kh_lms_save_course">';
-        echo '<input type="hidden" name="course_id" value="' . esc_attr( (string) $course_id ) . '">';
-        echo '<input type="hidden" name="_wpnonce" value="' . esc_attr( $nonce ) . '">';
-
-        echo '<div class="kh-card">';
-        echo '<h2>اطلاعات اصلی</h2>';
-        echo '<label>عنوان دوره<input type="text" name="title" value="' . esc_attr( $course->title ?? '' ) . '" required></label>';
-        echo '<label>Slug<input type="text" name="slug" value="' . esc_attr( $course->slug ?? '' ) . '"></label>';
-        echo '<label>توضیح کوتاه<textarea name="short_description">' . esc_textarea( $course->short_description ?? '' ) . '</textarea></label>';
-        echo '<label>توضیحات کامل<textarea name="description" rows="6">' . esc_textarea( $course->description ?? '' ) . '</textarea></label>';
-        echo '<label>مدرس<input type="text" name="author_name" value="' . esc_attr( get_userdata( $course->author_id ?? get_current_user_id() )->display_name ?? '' ) . '"></label>';
-        echo '<label>نوع دوره<select name="type"><option value="free" ' . selected( $course->type ?? 'free', 'free', false ) . '>رایگان</option><option value="paid" ' . selected( $course->type ?? 'free', 'paid', false ) . '>پولی</option></select></label>';
-        echo '<label>وضعیت<select name="status"><option value="draft" ' . selected( $course->status ?? 'draft', 'draft', false ) . '>پیش‌نویس</option><option value="publish" ' . selected( $course->status ?? 'draft', 'publish', false ) . '>منتشر شده</option></select></label>';
-        echo '</div>';
-
-        echo '<div class="kh-card">';
-        echo '<h2>ساختار دوره</h2>';
-        echo '<div id="kh-curriculum">';
-
-        if ( empty( $curriculum ) ) {
-            echo '<div class="kh-chapter" data-order="0">';
-            echo '<div class="kh-chapter-header"><input type="text" name="chapters[0][title]" placeholder="عنوان فصل" required></div>';
-            echo '<div class="kh-lessons">';
-            echo '<div class="kh-lesson" data-order="0">';
-            echo '<input type="text" name="chapters[0][lessons][0][title]" placeholder="عنوان درس" required>';
-            echo '<select name="chapters[0][lessons][0][content_type]"><option value="text">متن</option><option value="video">ویدئو</option></select>';
-            echo '<input type="text" name="chapters[0][lessons][0][video_url]" placeholder="URL ویدئو">';
-            echo '<label><input type="checkbox" name="chapters[0][lessons][0][is_preview]" value="1"> پیش‌نمایش</label>';
-            echo '</div>';
-            echo '</div>';
-            echo '<button type="button" class="button kh-add-lesson">افزودن درس</button>';
-            echo '</div>';
-        } else {
-            foreach ( $curriculum as $chapter_index => $chapter ) {
-                echo '<div class="kh-chapter" data-order="' . esc_attr( (string) $chapter_index ) . '">';
-                echo '<div class="kh-chapter-header"><input type="text" name="chapters[' . (int) $chapter_index . '][title]" value="' . esc_attr( $chapter->title ) . '" required></div>';
-                echo '<div class="kh-lessons">';
-
-                foreach ( $chapter->lessons as $lesson_index => $lesson ) {
-                    echo '<div class="kh-lesson" data-order="' . esc_attr( (string) $lesson_index ) . '">';
-                    echo '<input type="text" name="chapters[' . (int) $chapter_index . '][lessons][' . (int) $lesson_index . '][title]" value="' . esc_attr( $lesson->title ) . '" required>';
-                    echo '<select name="chapters[' . (int) $chapter_index . '][lessons][' . (int) $lesson_index . '][content_type]"><option value="text" ' . selected( $lesson->content_type, 'text', false ) . '>متن</option><option value="video" ' . selected( $lesson->content_type, 'video', false ) . '>ویدئو</option></select>';
-                    echo '<input type="text" name="chapters[' . (int) $chapter_index . '][lessons][' . (int) $lesson_index . '][video_url]" value="' . esc_attr( $lesson->video_url ?? '' ) . '" placeholder="URL ویدئو">';
-                    echo '<label><input type="checkbox" name="chapters[' . (int) $chapter_index . '][lessons][' . (int) $lesson_index . '][is_preview]" value="1" ' . checked( (int) $lesson->is_preview, 1, false ) . '> پیش‌نمایش</label>';
-                    echo '</div>';
-                }
-
-                echo '</div>';
-                echo '<button type="button" class="button kh-add-lesson">افزودن درس</button>';
-                echo '</div>';
+        foreach ( Repository::curriculum( $course_id ) as $chapter ) {
+            $html .= '<section class="kh-chapter-box"><h2>' . esc_html( $chapter->title ) . '</h2><ul>';
+            foreach ( $chapter->lessons as $lesson ) {
+                $locked = ( 'paid' === $course->type && ! $has_access && ! (int) $lesson->is_preview );
+                $html  .= '<li>' . ( $locked ? '🔒' : '▶' ) . ' ' . esc_html( $lesson->title ) . '</li>';
             }
+            $html .= '</ul></section>';
         }
 
-        echo '</div>';
-        echo '<button type="button" class="button" id="kh-add-chapter">افزودن فصل</button>';
-        echo '</div>';
-
-        echo '<p><button type="submit" class="button button-primary">ذخیره دوره</button></p>';
-        echo '</form></div>';
+        return $html . '</div></article>';
     }
 
-    public static function save_course(): void {
-        if ( ! current_user_can( 'manage_options' ) ) {
-            wp_die( 'دسترسی غیرمجاز' );
-        }
-
-        if ( ! Utils::enforce_nonce() ) {
-            wp_die( 'درخواست نامعتبر' );
+    public static function my_courses_shortcode(): string {
+        if ( ! is_user_logged_in() ) {
+            return '<p>برای مشاهده دوره‌های شما باید وارد حساب کاربری شوید.</p>';
         }
 
         global $wpdb;
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                'SELECT c.* FROM ' . Repository::table( 'courses' ) . ' c INNER JOIN ' . Repository::table( 'enrollments' ) . ' e ON e.course_id = c.id WHERE e.user_id = %d AND e.status = %s ORDER BY c.id DESC',
+                get_current_user_id(),
+                'active'
+            )
+        );
 
-        $course_id = absint( $_POST['course_id'] ?? 0 );
-        $title     = sanitize_text_field( wp_unslash( $_POST['title'] ?? '' ) );
-        $slug      = sanitize_title( wp_unslash( $_POST['slug'] ?? $title ) );
-
-        if ( '' === $title ) {
-            wp_die( 'عنوان دوره الزامی است.' );
+        if ( empty( $rows ) ) {
+            return '<p>هنوز دوره‌ای خریداری نکرده‌اید.</p>';
         }
 
-        $now     = current_time( 'mysql', true );
-        $type    = sanitize_key( wp_unslash( $_POST['type'] ?? 'free' ) );
-        $status  = sanitize_key( wp_unslash( $_POST['status'] ?? 'draft' ) );
-        $desc    = wp_kses_post( wp_unslash( $_POST['description'] ?? '' ) );
-        $short   = sanitize_textarea_field( wp_unslash( $_POST['short_description'] ?? '' ) );
-        $author_id = get_current_user_id();
-
-        $course_data = [
-            'title'            => $title,
-            'slug'             => $slug,
-            'description'      => $desc,
-            'short_description'=> $short,
-            'type'             => $type,
-            'status'           => $status,
-            'author_id'        => $author_id,
-            'updated_at'       => $now,
-        ];
-
-        if ( $course_id ) {
-            $wpdb->update( Repository::table( 'courses' ), $course_data, [ 'id' => $course_id ] );
-        } else {
-            $course_data['course_code'] = Utils::course_code();
-            $course_data['created_at']  = $now;
-            $course_data['author_id']   = $author_id;
-            $course_data['status']      = $status;
-            $wpdb->insert( Repository::table( 'courses' ), $course_data );
-            $course_id = (int) $wpdb->insert_id;
+        $output = '<div class="kh-courses">';
+        foreach ( $rows as $course ) {
+            $output .= '<div class="kh-card"><h3>' . esc_html( $course->title ) . '</h3>' . self::course_shortcode( [ 'id' => $course->id ] ) . '</div>';
         }
 
-        $wpdb->delete( Repository::table( 'chapters' ), [ 'course_id' => $course_id ] );
-        $wpdb->delete( Repository::table( 'lessons' ), [ 'course_id' => $course_id ] );
-
-        $chapters = $_POST['chapters'] ?? [];
-        if ( is_array( $chapters ) ) {
-            foreach ( $chapters as $chapter_index => $chapter_data ) {
-                $chapter_title = sanitize_text_field( wp_unslash( $chapter_data['title'] ?? '' ) );
-                if ( '' === $chapter_title ) {
-                    continue;
-                }
-
-                $wpdb->insert(
-                    Repository::table( 'chapters' ),
-                    [
-                        'course_id'  => $course_id,
-                        'title'      => $chapter_title,
-                        'description'=> '',
-                        'sort_order' => absint( $chapter_index ),
-                        'status'     => 'publish',
-                        'created_at' => $now,
-                        'updated_at' => $now,
-                    ]
-                );
-
-                $chapter_id = (int) $wpdb->insert_id;
-                $lessons    = $chapter_data['lessons'] ?? [];
-                if ( ! is_array( $lessons ) ) {
-                    continue;
-                }
-
-                foreach ( $lessons as $lesson_index => $lesson_data ) {
-                    $lesson_title = sanitize_text_field( wp_unslash( $lesson_data['title'] ?? '' ) );
-                    if ( '' === $lesson_title ) {
-                        continue;
-                    }
-
-                    $content_type = sanitize_key( wp_unslash( $lesson_data['content_type'] ?? 'text' ) );
-                    $video_url    = sanitize_url( wp_unslash( $lesson_data['video_url'] ?? '' ) );
-                    $is_preview   = isset( $lesson_data['is_preview'] ) ? 1 : 0;
-
-                    $wpdb->insert(
-                        Repository::table( 'lessons' ),
-                        [
-                            'course_id'    => $course_id,
-                            'chapter_id'   => $chapter_id,
-                            'title'        => $lesson_title,
-                            'slug'         => sanitize_title( $lesson_title . '-' . ( $course_id + $lesson_index ) ),
-                            'description'  => '',
-                            'content_type' => $content_type,
-                            'content'      => '',
-                            'video_url'    => $video_url,
-                            'duration'     => 0,
-                            'sort_order'   => absint( $lesson_index ),
-                            'is_preview'   => $is_preview,
-                            'is_free'      => 0,
-                            'status'       => 'publish',
-                            'created_at'   => $now,
-                            'updated_at'   => $now,
-                        ]
-                    );
-                }
-            }
-        }
-
-        wp_safe_redirect( admin_url( 'admin.php?page=kh-lms-edit&id=' . $course_id . '&updated=1' ) );
-        exit;
+        return $output . '</div>';
     }
 }

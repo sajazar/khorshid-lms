@@ -7,74 +7,64 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 final class VideoSecurity {
     public static function issue_token( int $user_id, int $lesson_id, int $course_id ): string {
-        $secret = self::secret();
-        $nonce  = wp_generate_uuid4();
-        $now    = time();
-        $exp    = $now + (int) Settings::get( 'token_lifetime', 180 );
+        $payload = wp_json_encode(
+            [
+                'user_id'    => $user_id,
+                'lesson_id'  => $lesson_id,
+                'course_id'  => $course_id,
+                'timestamp'  => time(),
+                'expiration' => time() + (int) Settings::get( 'token_lifetime', 180 ),
+                'nonce'      => wp_generate_uuid4(),
+            ]
+        );
 
-        $payload = [
-            'user_id'    => $user_id,
-            'lesson_id'  => $lesson_id,
-            'course_id'  => $course_id,
-            'timestamp'  => $now,
-            'expiration' => $exp,
-            'nonce'      => $nonce,
-        ];
-
-        $encoded = wp_json_encode( $payload );
-        $hash    = hash_hmac( 'sha256', $encoded, $secret );
-
-        return base64_encode( $encoded . '.' . $hash );
+        $encoded = self::base64url_encode( $payload );
+        $signature = hash_hmac( 'sha256', $encoded, self::secret() );
+        return $encoded . '.' . $signature;
     }
 
     public static function decode_payload( string $token ): ?array {
-        $parts = explode( '.', $token );
-        if ( count( $parts ) !== 2 ) {
+        $parts = explode( '.', $token, 2 );
+        if ( 2 !== count( $parts ) ) {
             return null;
         }
 
-        $payload_raw = base64_decode( $parts[0], true );
-        if ( false === $payload_raw ) {
+        [ $encoded, $signature ] = $parts;
+        $expected = hash_hmac( 'sha256', $encoded, self::secret() );
+        if ( ! hash_equals( $expected, $signature ) ) {
             return null;
         }
 
-        $payload = json_decode( $payload_raw, true );
-        if ( ! is_array( $payload ) ) {
-            return null;
-        }
-
-        $expected = hash_hmac( 'sha256', $parts[0], self::secret() );
-        if ( ! hash_equals( $expected, $parts[1] ) ) {
-            return null;
-        }
-
-        return $payload;
+        $raw     = self::base64url_decode( $encoded );
+        $payload = json_decode( $raw, true );
+        return is_array( $payload ) ? $payload : null;
     }
 
     public static function validate_token( string $token, int $user_id, int $lesson_id ): bool {
         $payload = self::decode_payload( $token );
-        if ( ! $payload ) {
-            return false;
+        return is_array( $payload )
+            && (int) ( $payload['user_id'] ?? 0 ) === $user_id
+            && (int) ( $payload['lesson_id'] ?? 0 ) === $lesson_id
+            && (int) ( $payload['expiration'] ?? 0 ) >= time();
+    }
+
+    private static function base64url_encode( string $value ): string {
+        return rtrim( strtr( base64_encode( $value ), '+/', '-_' ), '=' );
+    }
+
+    private static function base64url_decode( string $value ): string {
+        $padding = strlen( $value ) % 4;
+        if ( $padding ) {
+            $value .= str_repeat( '=', 4 - $padding );
         }
 
-        if ( (int) ( $payload['user_id'] ?? 0 ) !== $user_id ) {
-            return false;
-        }
-
-        if ( (int) ( $payload['lesson_id'] ?? 0 ) !== $lesson_id ) {
-            return false;
-        }
-
-        if ( ! isset( $payload['expiration'] ) || (int) $payload['expiration'] < time() ) {
-            return false;
-        }
-
-        return true;
+        $decoded = base64_decode( strtr( $value, '-_', '+/' ), true );
+        return false === $decoded ? '' : $decoded;
     }
 
     private static function secret(): string {
         $secret = get_option( 'kh_lms_secret' );
-        if ( ! $secret ) {
+        if ( ! is_string( $secret ) || '' === $secret ) {
             $secret = wp_generate_password( 64, true, true );
             update_option( 'kh_lms_secret', $secret, false );
         }
