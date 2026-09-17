@@ -1,10 +1,99 @@
 <?php
 namespace KhorshidLMS\Core;
-if ( ! defined( 'ABSPATH' ) ) exit;
-final class Rest {
- public static function hooks(): void { add_action('rest_api_init',[self::class,'routes']); }
- public static function routes(): void { register_rest_route('kh-lms/v1','/courses/(?P<id>\d+)', ['methods'=>'GET','callback'=>static fn($r)=>Repository::course((int)$r['id']),'permission_callback'=>'__return_true']); register_rest_route('kh-lms/v1','/progress',['methods'=>'POST','callback'=>[self::class,'progress'],'permission_callback'=>fn()=>is_user_logged_in()&&wp_verify_nonce($_SERVER['HTTP_X_WP_NONCE']??'','wp_rest')]); register_rest_route('kh-lms/v1','/video-token/(?P<lesson>\d+)', ['methods'=>'POST','callback'=>[self::class,'token'],'permission_callback'=>fn()=>is_user_logged_in()&&wp_verify_nonce($_SERVER['HTTP_X_WP_NONCE']??'','wp_rest')]); register_rest_route('kh-lms/v1','/video-stream/(?P<token>[A-Za-z0-9._-]+)', ['methods'=>'GET','callback'=>[self::class,'stream'],'permission_callback'=>'__return_true']); }
- public static function token($r){global $wpdb;$lesson=absint($r['lesson']);$l=$wpdb->get_row($wpdb->prepare('SELECT * FROM '.Repository::table('lessons').' WHERE id=%d',$lesson));if(!$l||!Repository::enrolled(get_current_user_id(),$l->course_id))return new \WP_Error('forbidden','دسترسی مجاز نیست',['status'=>403]);$raw=bin2hex(random_bytes(32));$wpdb->insert(Repository::table('tokens'),['user_id'=>get_current_user_id(),'lesson_id'=>$lesson,'token_hash'=>hash('sha256',$raw),'expires_at'=>gmdate('Y-m-d H:i:s',time()+180),'created_at'=>gmdate('Y-m-d H:i:s')]);return ['url'=>rest_url('kh-lms/v1/video-stream/'.rawurlencode($raw))];}
- public static function stream($r){global $wpdb;$raw=sanitize_text_field($r['token']);$row=$wpdb->get_row($wpdb->prepare('SELECT * FROM '.Repository::table('tokens').' WHERE token_hash=%s AND expires_at>UTC_TIMESTAMP()',hash('sha256',$raw)));if(!$row||!is_user_logged_in()||(int)$row->user_id!==get_current_user_id())return new \WP_Error('forbidden','دسترسی مجاز نیست',['status'=>403]);$l=$wpdb->get_row($wpdb->prepare('SELECT * FROM '.Repository::table('lessons').' WHERE id=%d',$row->lesson_id));if(!$l||!Repository::enrolled(get_current_user_id(),$l->course_id))return new \WP_Error('forbidden','دسترسی مجاز نیست',['status'=>403]);$url=esc_url_raw($l->video_url);$range=$_SERVER['HTTP_RANGE']??'';$args=['timeout'=>30,'headers'=>[]];if($range)$args['headers']['Range']=$range;$res=wp_remote_get($url,$args);if(is_wp_error($res))return new \WP_Error('stream_error','پخش ویدئو ممکن نیست',['status'=>502]);$body=wp_remote_retrieve_body($res);$type=wp_remote_retrieve_header($res,'content-type')?:'video/mp4';nocache_headers();header('Content-Type: '.$type);header('Accept-Ranges: bytes');header('Content-Length: '.strlen($body));echo $body;exit;}
- public static function progress($r){global $wpdb;$p=$r->get_json_params();$lesson=absint($p['lesson_id']??0);$seconds=max(0,absint($p['watched_seconds']??0));$l=$wpdb->get_row($wpdb->prepare('SELECT * FROM '.Repository::table('lessons').' WHERE id=%d',$lesson));if(!$l||!Repository::enrolled(get_current_user_id(),$l->course_id))return new \WP_Error('forbidden','دسترسی مجاز نیست',['status'=>403]);$duration=max(1,absint($p['duration']??$l->duration));$pct=min(100,($seconds/$duration)*100);$done=$pct>=90;$now=gmdate('Y-m-d H:i:s');$wpdb->replace(Repository::table('progress'),['user_id'=>get_current_user_id(),'course_id'=>$l->course_id,'lesson_id'=>$lesson,'watched_seconds'=>$seconds,'duration'=>$duration,'percentage'=>$pct,'last_position'=>$seconds,'completed'=>$done?1:0,'completed_at'=>$done?$now:null,'updated_at'=>$now]);return ['saved'=>true,'percentage'=>$pct,'completed'=>$done];}
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+final class Frontend {
+    public static function hooks(): void {
+        add_shortcode( 'kh_lms_course', [ self::class, 'course_shortcode' ] );
+        add_shortcode( 'kh_lms_my_courses', [ self::class, 'my_courses_shortcode' ] );
+        add_action( 'wp_enqueue_scripts', [ self::class, 'assets' ] );
+        add_filter( 'query_vars', [ self::class, 'query_vars' ] );
+    }
+
+    public static function query_vars( array $vars ): array {
+        $vars[] = 'my-courses';
+        return $vars;
+    }
+
+    public static function assets(): void {
+        if ( is_admin() ) {
+            return;
+        }
+
+        if ( is_singular() || is_account_page() ) {
+            wp_enqueue_style( 'kh-lms-frontend', KH_LMS_URL . 'assets/css/frontend.css', [], KH_LMS_VERSION );
+            wp_enqueue_script( 'kh-lms-frontend', KH_LMS_URL . 'assets/js/frontend.js', [], KH_LMS_VERSION, true );
+            wp_localize_script(
+                'kh-lms-frontend',
+                'khLms',
+                [
+                    'api'   => esc_url_raw( rest_url( 'kh-lms/v1/' ) ),
+                    'nonce' => wp_create_nonce( 'wp_rest' ),
+                ]
+            );
+        }
+    }
+
+    public static function course_shortcode( array $atts = [] ): string {
+        $course_id = isset( $atts['id'] ) ? absint( $atts['id'] ) : ( isset( $atts['course'] ) ? absint( $atts['course'] ) : 0 );
+        $course    = Repository::course( $course_id );
+
+        if ( ! $course ) {
+            return '<p>دوره‌ای پیدا نشد.</p>';
+        }
+
+        $user_id = get_current_user_id();
+        $has_access = $user_id ? Repository::is_enrolled( $user_id, $course_id ) : false;
+
+        if ( 'paid' === $course->type && ! $has_access && ! is_user_logged_in() ) {
+            return '<div class="kh-course-teaser"><h2>' . esc_html( $course->title ) . '</h2><p>' . esc_html( $course->short_description ) . '</p><a class="kh-button" href="' . esc_url( wp_login_url( get_permalink() ) ) . '">ورود و خرید دوره</a></div>';
+        }
+
+        $html = '<article class="kh-course"><header><h1>' . esc_html( $course->title ) . '</h1><p>' . esc_html( $course->short_description ) . '</p>' . ( ( 'paid' === $course->type && ! $has_access ) ? '<a class="kh-button" href="' . esc_url( wc_get_cart_url() ) . '">خرید دوره</a>' : '' ) . '</header>';
+        $html .= '<div class="kh-curriculum">';
+
+        foreach ( Repository::curriculum( $course_id ) as $chapter ) {
+            $html .= '<section class="kh-chapter-box"><h2>' . esc_html( $chapter->title ) . '</h2><ul>';
+            foreach ( $chapter->lessons as $lesson ) {
+                $locked = ( 'paid' === $course->type && ! $has_access && ! $lesson->is_preview ) ? true : false;
+                $html  .= '<li>' . ( $locked ? '🔒' : '▶' ) . ' ' . esc_html( $lesson->title ) . '</li>';
+            }
+            $html .= '</ul></section>';
+        }
+
+        $html .= '</div></article>';
+
+        return $html;
+    }
+
+    public static function my_courses_shortcode(): string {
+        if ( ! is_user_logged_in() ) {
+            return '<p>برای مشاهده دوره‌های شما باید وارد حساب کاربری شوید.</p>';
+        }
+
+        global $wpdb;
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                'SELECT c.* FROM ' . Repository::table( 'courses' ) . ' c INNER JOIN ' . Repository::table( 'enrollments' ) . ' e ON e.course_id = c.id WHERE e.user_id = %d AND e.status = %s',
+                get_current_user_id(),
+                'active'
+            )
+        );
+
+        if ( empty( $rows ) ) {
+            return '<p>هنوز دوره‌ای خریداری نکرده‌اید.</p>';
+        }
+
+        $output = '<div class="kh-courses">';
+        foreach ( $rows as $course ) {
+            $output .= '<div class="kh-card"><h3>' . esc_html( $course->title ) . '</h3><p>' . esc_html( $course->short_description ) . '</p>' . do_shortcode( '[kh_lms_course id="' . (int) $course->id . '"]' ) . '</div>';
+        }
+        $output .= '</div>';
+
+        return $output;
+    }
 }

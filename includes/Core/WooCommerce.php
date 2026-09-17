@@ -1,10 +1,76 @@
 <?php
 namespace KhorshidLMS\Core;
-if ( ! defined( 'ABSPATH' ) ) exit;
-final class WooCommerce {
- public static function hooks(): void { add_action('woocommerce_order_status_processing',[self::class,'grant']);add_action('woocommerce_order_status_completed',[self::class,'grant']);add_action('woocommerce_order_status_refunded',[self::class,'revoke']);add_action('woocommerce_product_options_general_product_data',[self::class,'field']);add_action('woocommerce_process_product_meta',[self::class,'save']); }
- public static function field(): void { woocommerce_wp_text_input(['id'=>'kh_lms_course_id','label'=>'شناسه دوره LMS','desc_tip'=>true,'description'=>'محصول را به یک دوره متصل کنید.']); }
- public static function save($id): void { if(isset($_POST['kh_lms_course_id']))update_post_meta($id,'_kh_lms_course_id',absint($_POST['kh_lms_course_id'])); }
- public static function grant($order_id): void { if(!function_exists('wc_get_order'))return;$o=wc_get_order($order_id);$uid=$o->get_user_id();if(!$uid)return;global $wpdb;$now=gmdate('Y-m-d H:i:s');foreach($o->get_items() as $item){$pid=$item->get_product_id();$cid=absint(get_post_meta($pid,'_kh_lms_course_id',true));if($cid)$wpdb->query($wpdb->prepare('INSERT INTO '.Repository::table('enrollments').'(user_id,course_id,order_id,product_id,status,created_at) VALUES(%d,%d,%d,%d,%s,%s) ON DUPLICATE KEY UPDATE status=VALUES(status)', $uid,$cid,$order_id,$pid,'active',$now));}}
- public static function revoke($order_id): void {if(!function_exists('wc_get_order'))return;$o=wc_get_order($order_id);global $wpdb;foreach($o->get_items() as $item){$cid=absint(get_post_meta($item->get_product_id(),'_kh_lms_course_id',true));if($cid)$wpdb->update(Repository::table('enrollments'),['status'=>'revoked'],['user_id'=>$o->get_user_id(),'course_id'=>$cid]);}}
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+final class VideoSecurity {
+    public static function issue_token( int $user_id, int $lesson_id, int $course_id ): string {
+        $secret = self::secret();
+        $nonce  = wp_generate_uuid4();
+        $now    = time();
+        $exp    = $now + 180;
+
+        $payload = [
+            'user_id'    => $user_id,
+            'lesson_id'  => $lesson_id,
+            'course_id'  => $course_id,
+            'timestamp'  => $now,
+            'expiration' => $exp,
+            'nonce'      => $nonce,
+        ];
+
+        $encoded = wp_json_encode( $payload );
+        $hash    = hash_hmac( 'sha256', $encoded, $secret );
+
+        return base64_encode( $encoded . '.' . $hash );
+    }
+
+    public static function validate_token( string $token, int $user_id, int $lesson_id ): bool {
+        $secret = self::secret();
+        $parts  = explode( '.', $token );
+        if ( count( $parts ) !== 2 ) {
+            return false;
+        }
+
+        $payload_raw = base64_decode( $parts[0], true );
+        if ( false === $payload_raw ) {
+            return false;
+        }
+
+        $payload = json_decode( $payload_raw, true );
+        if ( ! is_array( $payload ) ) {
+            return false;
+        }
+
+        $expected = hash_hmac( 'sha256', $parts[0], $secret );
+        if ( ! hash_equals( $expected, $parts[1] ) ) {
+            return false;
+        }
+
+        if ( (int) $payload['user_id'] !== $user_id ) {
+            return false;
+        }
+
+        if ( (int) $payload['lesson_id'] !== $lesson_id ) {
+            return false;
+        }
+
+        if ( ! isset( $payload['expiration'] ) || (int) $payload['expiration'] < time() ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static function secret(): string {
+        $secret = get_option( 'kh_lms_secret' );
+        if ( ! $secret ) {
+            $secret = wp_generate_password( 64, true, true );
+            update_option( 'kh_lms_secret', $secret, false );
+        }
+
+        return $secret;
+    }
 }

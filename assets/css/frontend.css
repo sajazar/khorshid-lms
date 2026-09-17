@@ -1,1 +1,73 @@
-:root{--kh-primary:#6d5dfc;--kh-bg:#f6f7fb;--kh-card:#fff;--kh-text:#1c2333;--kh-muted:#697386;--kh-border:#e6e8ef;--kh-radius:14px}.kh-course,.kh-courses{max-width:1100px;margin:2rem auto;color:var(--kh-text);direction:rtl}.kh-course header{background:linear-gradient(135deg,#151a35,#3d328f);color:#fff;border-radius:var(--kh-radius);padding:2.5rem}.kh-course h1{margin-top:0}.kh-curriculum{display:grid;gap:1rem;margin-top:1.5rem}.kh-curriculum section,.kh-card{background:var(--kh-card);border:1px solid var(--kh-border);border-radius:var(--kh-radius);padding:1.25rem;box-shadow:0 5px 20px #252b3d0d}.kh-curriculum ul{list-style:none;margin:0;padding:0}.kh-curriculum li{padding:.8rem;border-top:1px solid var(--kh-border)}.kh-button{display:inline-block;background:#fff;color:#382e9e;padding:.7rem 1.2rem;border-radius:9px;text-decoration:none;font-weight:700}
+.kh-lms-admin {
+  direction: rtl;
+  font-family: 'Tahoma', sans-serif;
+}
+
+.kh-lms-admin .kh-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 20px;
+  margin: 20px 0;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+}
+
+.kh-lms-admin .kh-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 20px;
+}
+
+.kh-lms-admin label {
+  display: block;
+  margin: 12px 0;
+  font-weight: 600;
+}
+
+.kh-lms-admin input,
+.kh-lms-admin textarea,
+.kh-lms-admin select,
+.kh-lms-admin button {
+  font-size: 14px;
+}
+
+.kh-lms-admin input,
+.kh-lms-admin textarea,
+.kh-lms-admin select {
+  width: 100%;
+  max-width: 760px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.kh-lms-admin textarea {
+  min-height: 120px;
+}
+
+.kh-lms-admin .kh-chapter {
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  border-radius: 12px;
+  padding: 18px;
+  margin: 18px 0;
+}
+
+.kh-lms-admin .kh-lessons {
+  margin-top: 16px;
+}
+
+.kh-lms-admin .kh-lesson {
+  display: grid;
+  grid-template-columns: 1.2fr 0.7fr 1fr auto;
+  gap: 12px;
+  align-items: center;
+  margin: 10px 0;
+}
+
+.kh-lms-admin .kh-add-lesson,
+.kh-lms-admin #kh-add-chapter {
+  margin-top: 10px;
+}

@@ -1,1 +1,57 @@
-document.addEventListener('DOMContentLoaded',()=>{const root=document.querySelector('#kh-curriculum');let ci=root?root.children.length:0;document.querySelector('#kh-add-chapter')?.addEventListener('click',()=>{const d=document.createElement('div');d.className='kh-chapter';d.innerHTML=`<input name="chapters[${ci}][title]" placeholder="عنوان فصل" required><button type="button" class="button kh-remove">حذف</button><div class="kh-lessons"></div><button type="button" class="button kh-add-lesson">افزودن درس</button>`;root.appendChild(d);ci++;});document.addEventListener('click',e=>{if(e.target.matches('.kh-remove'))e.target.closest('.kh-chapter')?.remove();if(e.target.matches('.kh-add-lesson')){const ch=e.target.closest('.kh-chapter'),box=ch.querySelector('.kh-lessons'),index=box.children.length,chapter=[...root.children].indexOf(ch);const row=document.createElement('div');row.className='kh-lesson';row.innerHTML=`<input name="chapters[${chapter}][lessons][${index}][title]" placeholder="عنوان درس" required><select name="chapters[${chapter}][lessons][${index}][content_type]"><option value="text">متن</option><option value="video">ویدئو</option></select><input name="chapters[${chapter}][lessons][${index}][video_url]" placeholder="URL ویدئو"><label><input name="chapters[${chapter}][lessons][${index}][is_preview]" type="checkbox" value="1"> پیش‌نمایش</label>`;box.appendChild(row);}});});
+.kh-course,
+.kh-courses {
+  direction: rtl;
+  max-width: 1100px;
+  margin: 32px auto;
+  color: #1f2937;
+}
+
+.kh-course header {
+  background: linear-gradient(135deg, #1e293b, #4f46e5);
+  color: #fff;
+  border-radius: 18px;
+  padding: 28px;
+}
+
+.kh-course h1,
+.kh-card h3,
+.kh-course h2 {
+  margin-top: 0;
+}
+
+.kh-course .kh-button,
+.kh-lms-admin .button-primary {
+  display: inline-block;
+  background: #4f46e5;
+  color: white;
+  border-radius: 10px;
+  text-decoration: none;
+  padding: 10px 18px;
+  font-weight: 600;
+}
+
+.kh-curriculum {
+  display: grid;
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.kh-chapter-box,
+.kh-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 8px 18px rgba(15,23,42,0.04);
+}
+
+.kh-chapter-box ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.kh-chapter-box li {
+  padding: 8px 0;
+  border-top: 1px solid #eef2f7;
+}

@@ -1,17 +1,69 @@
 <?php
 namespace KhorshidLMS\Core;
-if ( ! defined( 'ABSPATH' ) ) exit;
-final class Schema {
-    public static function install(): void {
-        global $wpdb; $c = $wpdb->get_charset_collate(); $p = $wpdb->prefix . 'kh_lms_';
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-        dbDelta("CREATE TABLE {$p}courses (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, course_code VARCHAR(32) NOT NULL, title VARCHAR(255) NOT NULL, slug VARCHAR(200) NOT NULL, description LONGTEXT NOT NULL, short_description TEXT NOT NULL, thumbnail BIGINT UNSIGNED NULL, status VARCHAR(20) NOT NULL DEFAULT 'draft', type VARCHAR(20) NOT NULL DEFAULT 'free', author_id BIGINT UNSIGNED NOT NULL, product_id BIGINT UNSIGNED NULL, completion_percent TINYINT UNSIGNED NOT NULL DEFAULT 90, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY(id), UNIQUE KEY code(course_code), UNIQUE KEY slug(slug), KEY status(status)) $c;");
-        dbDelta("CREATE TABLE {$p}chapters (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, course_id BIGINT UNSIGNED NOT NULL, title VARCHAR(255) NOT NULL, description TEXT NOT NULL, sort_order INT NOT NULL DEFAULT 0, status VARCHAR(20) NOT NULL DEFAULT 'publish', created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY(id), KEY course(course_id)) $c;");
-        dbDelta("CREATE TABLE {$p}lessons (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, course_id BIGINT UNSIGNED NOT NULL, chapter_id BIGINT UNSIGNED NOT NULL, title VARCHAR(255) NOT NULL, slug VARCHAR(200) NOT NULL, description LONGTEXT NOT NULL, content_type VARCHAR(20) NOT NULL DEFAULT 'text', content LONGTEXT NOT NULL, video_url TEXT NULL, duration INT UNSIGNED NOT NULL DEFAULT 0, sort_order INT NOT NULL DEFAULT 0, is_preview TINYINT(1) NOT NULL DEFAULT 0, is_free TINYINT(1) NOT NULL DEFAULT 0, status VARCHAR(20) NOT NULL DEFAULT 'publish', created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY(id), KEY course(course_id), KEY chapter(chapter_id)) $c;");
-        dbDelta("CREATE TABLE {$p}enrollments (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, user_id BIGINT UNSIGNED NOT NULL, course_id BIGINT UNSIGNED NOT NULL, order_id BIGINT UNSIGNED NULL, product_id BIGINT UNSIGNED NULL, status VARCHAR(20) NOT NULL DEFAULT 'active', expires_at DATETIME NULL, created_at DATETIME NOT NULL, PRIMARY KEY(id), UNIQUE KEY user_course(user_id,course_id), KEY status(status)) $c;");
-        dbDelta("CREATE TABLE {$p}progress (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, user_id BIGINT UNSIGNED NOT NULL, course_id BIGINT UNSIGNED NOT NULL, lesson_id BIGINT UNSIGNED NOT NULL, watched_seconds INT UNSIGNED NOT NULL DEFAULT 0, duration INT UNSIGNED NOT NULL DEFAULT 0, percentage DECIMAL(5,2) NOT NULL DEFAULT 0, last_position INT UNSIGNED NOT NULL DEFAULT 0, completed TINYINT(1) NOT NULL DEFAULT 0, completed_at DATETIME NULL, updated_at DATETIME NOT NULL, PRIMARY KEY(id), UNIQUE KEY user_lesson(user_id,lesson_id), KEY course(course_id)) $c;");
-        dbDelta("CREATE TABLE {$p}tokens (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, user_id BIGINT UNSIGNED NOT NULL, lesson_id BIGINT UNSIGNED NOT NULL, token_hash CHAR(64) NOT NULL, expires_at DATETIME NOT NULL, created_at DATETIME NOT NULL, PRIMARY KEY(id), UNIQUE KEY hash_key(token_hash), KEY expiry(expires_at)) $c;");
-        dbDelta("CREATE TABLE {$p}certificates (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, user_id BIGINT UNSIGNED NOT NULL, course_id BIGINT UNSIGNED NOT NULL, certificate_number VARCHAR(40) NOT NULL, verification_code CHAR(32) NOT NULL, issued_at DATETIME NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'issued', PRIMARY KEY(id), UNIQUE KEY number_key(certificate_number), UNIQUE KEY verify_key(verification_code)) $c;");
-        update_option( 'kh_lms_version', KH_LMS_VERSION );
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+final class Plugin {
+    private static bool $booted = false;
+
+    public static function activate(): void {
+        Schema::install();
+        self::ensure_storage();
+        self::register_endpoints();
+        flush_rewrite_rules();
+    }
+
+    public static function deactivate(): void {
+        flush_rewrite_rules();
+    }
+
+    public static function boot(): void {
+        if ( self::$booted ) {
+            return;
+        }
+
+        self::$booted = true;
+
+        if ( version_compare( PHP_VERSION, '8.1', '<' ) ) {
+            add_action(
+                'admin_notices',
+                static function (): void {
+                    echo '<div class="notice notice-error"><p>افزونه Khorshid LMS نیاز به PHP 8.1 یا بالاتر دارد.</p></div>';
+                }
+            );
+            return;
+        }
+
+        Admin::hooks();
+        Frontend::hooks();
+        Rest::hooks();
+        WooCommerce::hooks();
+
+        add_action( 'init', [ self::class, 'register_endpoints' ] );
+    }
+
+    public static function register_endpoints(): void {
+        add_rewrite_endpoint( 'my-courses', EP_ROOT | EP_PAGES );
+    }
+
+    private static function ensure_storage(): void {
+        $upload_dir = wp_upload_dir();
+        $base_dir   = trailingslashit( $upload_dir['basedir'] ) . 'khorshid-lms-storage';
+
+        wp_mkdir_p( $base_dir . '/certificates' );
+        wp_mkdir_p( $base_dir . '/cache' );
+
+        if ( ! file_exists( $base_dir . '/index.php' ) ) {
+            file_put_contents( $base_dir . '/index.php', "<?php\n// Silence is golden.\n" );
+        }
+
+        if ( ! file_exists( $base_dir . '/.htaccess' ) ) {
+            file_put_contents(
+                $base_dir . '/.htaccess',
+                "Options -Indexes\n<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n"
+            );
+        }
     }
 }
